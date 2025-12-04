@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Project specific
+outputs/
+logs/
+*.log
+*.jsonl
+*.csv
+results/
+checkpoints/
+*.bin
+*.pth
+*.safetensors
+
+# Mac
+.DS_Store

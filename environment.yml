@@ -1,0 +1,21 @@
+name: pangu
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - torch
+      - transformers>=4.43.0
+      - datasets>=2.18.0
+      - rank-bm25
+      - sentencepiece
+      - safetensors
+      - tqdm
+      - accelerate
+      - huggingface-hub
+      - numpy
+      - scipy
+      - pandas
+# 注意：如果使用 NPU（Ascend 910/910B），需将上述 pip 的 torch 替换为 torch-npu，并确保安装配套的 Ascend Toolkit。
