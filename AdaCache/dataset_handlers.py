@@ -959,17 +959,126 @@ class ModelScopeCOTHandler(BaseDatasetHandler):
         return str(example.get("target", "")).strip()
 
     def extract_prediction(self, model_output: str) -> str:
+        """
+        从COT-Collection数据集的模型输出中提取预测答案
+        
+        支持的答案格式:
+        - Final answer: xxx
+        - 选择题: a, b, c, d, A, B, C, D
+        - 是/否题: Yes, No, a, b
+        - 数字答案
+        """
         import re
-        m = re.search(r"Final\s+answer\s*:\s*(.+?)(?:\n|$)", model_output, re.IGNORECASE)
+        
+        # 🔥 步骤 0: 预处理 - 截断到第一个 "Final answer" 后的答案，避免模型继续生成新问题
+        # 查找第一个 "Final answer:" 并截取其后的内容
+        first_final_match = re.search(r'Final\s+answer\s*:\s*(.+?)(?:\n|$)', model_output, re.IGNORECASE)
+        if first_final_match:
+            # 找到了 Final answer，截断到这个答案
+            answer_text = first_final_match.group(1).strip()
+            
+            # 🔥 清理答案文本：移除尾随的无关内容
+            # 如果答案中包含 "You are an AI" 等，截断到这些位置
+            noise_patterns = [
+                r'You are an AI',
+                r'Problem:',
+                r'Solution:',
+                r'Question:',
+                r'Context:',
+                r'\n\n',  # 双换行通常表示新的段落
+            ]
+            for pattern in noise_patterns:
+                noise_match = re.search(pattern, answer_text, re.IGNORECASE)
+                if noise_match:
+                    answer_text = answer_text[:noise_match.start()].strip()
+            
+            # 🔥 提取核心答案（处理选择题等）
+            return self._extract_core_answer(answer_text)
+        
+        # 🔥 步骤 1: 尝试匹配 "answer is xxx" 格式
+        m = re.search(r'answer\s+is\s+(.+?)(?:[\n\r.]|$)', model_output, re.IGNORECASE)
         if m:
-            return m.group(1).strip()
-        m = re.search(r"answer\s+is\s+(.+?)(?:[\n\r]|$)", model_output, re.IGNORECASE)
+            return self._extract_core_answer(m.group(1).strip())
+        
+        # 🔥 步骤 2: 尝试匹配 "Therefore, the answer is xxx" 格式
+        m = re.search(r'Therefore,?\s+(?:the\s+)?answer\s+is\s+(.+?)(?:[\n\r.]|$)', model_output, re.IGNORECASE)
         if m:
-            return m.group(1).strip()
-        lines = [ln.strip() for ln in model_output.strip().split("\n") if ln.strip()]
-        if lines:
-            return lines[-1]
-        return model_output.strip()
+            return self._extract_core_answer(m.group(1).strip())
+        
+        # 🔥 步骤 3: 尝试匹配独立的选择项答案（如 "b" 或 "(b)" 或 "`b`"）
+        # 先截断到第一个可能的答案位置
+        lines = model_output.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            # 匹配单独的选择项
+            option_match = re.match(r'^[`\(]?\s*([abcdABCD])\s*[\)`]?[\s\.\)]?(?:for\s+)?(Yes|No)?[\s\.]*$', line, re.IGNORECASE)
+            if option_match:
+                return option_match.group(1).lower()
+            
+            # 匹配 "b) No" 或 "a for Yes" 格式
+            choice_match = re.match(r'^([abcdABCD])\s*[\)\.]?\s*(for\s+)?(Yes|No)?\.?\s*$', line, re.IGNORECASE)
+            if choice_match:
+                return choice_match.group(1).lower()
+        
+        # 🔥 步骤 4: 如果以上都失败，返回第一行非空内容
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('Problem:') and not line.startswith('You are'):
+                return self._extract_core_answer(line)
+        
+        return model_output.strip()[:100]  # 限制长度
+    
+    def _extract_core_answer(self, answer_text: str) -> str:
+        """
+        从答案文本中提取核心答案
+        
+        处理各种格式:
+        - "b" -> "b"
+        - "(b)" -> "b"  
+        - "`b`" -> "b"
+        - "b) No" -> "b"
+        - "b for No" -> "b"
+        - "1857" -> "1857"
+        """
+        import re
+        
+        answer_text = answer_text.strip()
+        
+        # 移除尾随的标点
+        answer_text = re.sub(r'[\.,;:!?]+$', '', answer_text).strip()
+        
+        # 🔥 匹配选择项格式: "b", "(b)", "`b`", "b) No", "b. No", "a for Yes"
+        option_match = re.match(r'^[`\(]?\s*([abcdABCD1234])\s*[\)`]?(?:\s*[\)\.]\s*(?:for\s+)?(?:Yes|No|yes|no)?)?\s*[`]?$', answer_text, re.IGNORECASE)
+        if option_match:
+            opt = option_match.group(1)
+            # 如果是 1,2,3,4 转换为 a,b,c,d
+            if opt in '1234':
+                return chr(ord('a') + int(opt) - 1)
+            return opt.lower()
+        
+        # 🔥 匹配 "a. Western Bulldogs" 格式，只取选项字母
+        option_with_text = re.match(r'^([abcdABCD])\s*[\)\.:]\s*', answer_text)
+        if option_with_text:
+            return option_with_text.group(1).lower()
+        
+        # 🔥 匹配数字答案
+        num_match = re.match(r'^(\d+(?:[,\s]\d{3})*(?:\.\d+)?)\s*$', answer_text)
+        if num_match:
+            # 标准化数字（移除千分位分隔符）
+            return num_match.group(1).replace(',', '').replace(' ', '')
+        
+        # 🔥 匹配 Yes/No
+        if answer_text.lower() in ['yes', 'no']:
+            return answer_text.lower()
+        
+        # 🔥 截断过长的答案
+        if len(answer_text) > 200:
+            # 可能包含额外内容，截取第一行或第一句
+            first_line = answer_text.split('\n')[0].strip()
+            first_sentence = re.split(r'[.!?]', answer_text)[0].strip()
+            return first_line if len(first_line) <= 100 else first_sentence[:100]
+        
+        return answer_text
 
 DATASET_HANDLERS = {
     "openai/gsm8k": GSM8KHandler,
@@ -981,13 +1090,27 @@ DATASET_HANDLERS = {
 }
 
 
-def get_dataset_handler(dataset_name: str, subset: str = None) -> BaseDatasetHandler:
-    """获取对应的数据集处理器"""
+def get_dataset_handler(dataset_name: str, subset: str = None, tasks: str = None) -> BaseDatasetHandler:
+    """
+    获取对应的数据集处理器
+    
+    Args:
+        dataset_name: 数据集名称
+        subset: 数据集子集
+        tasks: 任务列表（逗号分隔），用于过滤 ModelScope CoT-Collection 等数据集
+    """
     if dataset_name not in DATASET_HANDLERS:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
     handler_class = DATASET_HANDLERS[dataset_name]
-    return handler_class(dataset_name, subset)
+    handler = handler_class(dataset_name, subset)
+    
+    # 🔥 如果提供了 tasks 参数，将其设置到 handler 上
+    if tasks:
+        task_list = [t.strip() for t in tasks.split(',') if t.strip()]
+        handler.task_list = task_list
+    
+    return handler
 
 
 def list_available_datasets_and_subsets():

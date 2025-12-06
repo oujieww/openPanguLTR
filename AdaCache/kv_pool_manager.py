@@ -182,8 +182,10 @@ class KVPoolManager:
         离线 prefilling: 为 1024 个 shot 构建 KV cache 池
         同时缓存固定部分（System Prompt、Paper 固定部分）
         
+        ⚠️ 重要：只缓存训练集示例，绞不包含测试集问题，避免数据污染
+        
         Args:
-            examples: 示例列表
+            examples: 示例列表（必须是训练集，不能包含测试集）
             force_rebuild: 是否强制重建
             system_prompt: System prompt 文本
             paper_config: Paper 模式配置 {'fullshot_ids': [0,1,2,3], 'num_questions': 4}

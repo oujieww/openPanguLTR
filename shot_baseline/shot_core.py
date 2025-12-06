@@ -13,10 +13,10 @@ import torch
 from typing import Dict, List, Tuple
 from tqdm import tqdm
 
-# 添加根路径以定位 util 包
-base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if base_path not in sys.path:
-    sys.path.insert(0, base_path)
+# 添加 util 路径
+baseline_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if baseline_path not in sys.path:
+    sys.path.insert(0, baseline_path)
 
 # 从 util 导入评估函数
 try:
@@ -355,25 +355,42 @@ class ShotEvaluator:
         """
         截断模型输出，只保留第一个完整答案
         
-        问题：模型可能在回答完第一个问题后继续生成其他内容
-        解决：在各种结束标记处截断
+        支持两种格式:
+        1. GSM8K 格式: #### <number>
+        2. COT-Collection 格式: Final answer: <answer>
         """
         import re
         
-        # 方法 1: 在 "#### " + 答案 后截断
-        # 匹配模式：#### 答案 后面可能跟着换行符和新问题
-        match = re.search(r'(####\s*[\-]?\d+(?:\.\d+)?)', response)
+        # 策略 1: 在 "Final answer:" + 答案 后截断
+        final_match = re.search(r'(Final\s+answer\s*:\s*[^\n]+)', response, re.IGNORECASE)
+        if final_match:
+            end_pos = final_match.end()
+            remaining = response[end_pos:]
+            
+            # 检测是否开始生成新问题或幻觉内容
+            noise_patterns = [
+                r'\s*You are an AI',
+                r'\s*Problem:',
+                r'\s*Solution:',
+                r'\s*Question:',
+                r'\s*Context:',
+                r'\n\n',
+            ]
+            for pattern in noise_patterns:
+                if re.search(pattern, remaining, re.IGNORECASE):
+                    response = response[:end_pos].strip()
+                    return response
+        
+        # 策略 2: 在 "#### " + 答案 后截断 (GSM8K 格式)
+        match = re.search(r'(####\s*[\-]?\d+(?:,\d{3})*(?:\.\d+)?)', response)
         if match:
             end_pos = match.end()
-            # 检查后面是否有新问题开始
             remaining = response[end_pos:]
-            # 如果后面有 "Problem:" 或重复内容，则截断
             if 'Problem:' in remaining or 'problem:' in remaining.lower():
                 response = response[:end_pos].strip()
                 return response
         
-        # 方法 2: 在 "Problem:" 重复出现时截断
-        # 查找第二个 "Problem:" 的位置
+        # 策略 3: 在 "Problem:" 重复出现时截断
         first_problem = response.find('Problem:')
         if first_problem != -1:
             second_problem = response.find('Problem:', first_problem + 1)
@@ -381,14 +398,19 @@ class ShotEvaluator:
                 response = response[:second_problem].strip()
                 return response
         
-        # 方法 3: 在双换行 + 新内容开始时截断
-        # 查找 "\n\n" 后面跟着新问题
+        # 策略 4: 检测幻觉模式 ("You are an AI assistant")
+        hallucination_match = re.search(r'You are an AI assistant', response, re.IGNORECASE)
+        if hallucination_match:
+            response = response[:hallucination_match.start()].strip()
+            return response
+        
+        # 策略 5: 在双换行 + 新内容开始时截断
         parts = response.split('\n\n')
         if len(parts) > 1:
             result_parts = [parts[0]]
             for part in parts[1:]:
                 part_lower = part.strip().lower()
-                if part_lower.startswith('problem:') or part_lower.startswith('solution:'):
+                if part_lower.startswith('problem:') or part_lower.startswith('you are'):
                     break
                 result_parts.append(part)
             response = '\n\n'.join(result_parts)

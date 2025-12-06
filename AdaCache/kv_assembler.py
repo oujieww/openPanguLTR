@@ -82,6 +82,97 @@ class KVAssembler:
         logging.info(f"初始化 KVAssembler: num_layers={self.num_layers}, "
                     f"num_heads={self.num_heads}, head_dim={self.head_dim}, mode={mode}")
     
+    def _should_stop_generation(self, decoded_text: str) -> bool:
+        """
+        🔥 检查是否应该停止生成
+        
+        支持多种结束标志:
+        - #### (数学题答案格式)
+        - Final answer: (COT-Collection 格式)
+        - 模型开始重复生成新问题 (You are an AI, Problem:, Solution: 等)
+        """
+        # 检查标准结束标志
+        if "####" in decoded_text:
+            return True
+        
+        # 检查 Final answer 标志（COT-Collection 数据集）
+        import re
+        if re.search(r'Final\s+answer\s*:', decoded_text, re.IGNORECASE):
+            # 找到 Final answer 后，检查是否已经有答案
+            final_match = re.search(r'Final\s+answer\s*:\s*(.+?)(?:\n|$)', decoded_text, re.IGNORECASE)
+            if final_match and final_match.group(1).strip():
+                # 已经有答案了，检查是否开始生成新内容
+                after_answer = decoded_text[final_match.end():]
+                # 如果答案后有超过 20 个字符，可能开始生成新内容
+                if len(after_answer.strip()) > 20:
+                    return True
+                # 检查是否开始生成新问题
+                noise_patterns = ['You are an AI', 'Problem:', 'Solution:', 'Question:', 'Context:']
+                for pattern in noise_patterns:
+                    if pattern.lower() in after_answer.lower():
+                        return True
+        
+        # 检查是否开始生成重复内容（模型幻觉）
+        if 'You are an AI assistant' in decoded_text:
+            # 计算出现次数
+            count = decoded_text.count('You are an AI assistant')
+            if count >= 2:
+                return True
+        
+        return False
+    
+    def _truncate_output(self, response: str) -> str:
+        """
+        🔥 截断模型输出，移除无关内容
+        
+        处理模型继续生成新问题的情况
+        """
+        import re
+        
+        # 🔥 策略 1: 在 "####" 后截断
+        if "####" in response:
+            parts = response.split("####")
+            if len(parts) >= 2:
+                # 保留 #### 和其后的答案
+                answer_part = parts[1].split("\n")[0].strip()
+                return parts[0] + "#### " + answer_part
+        
+        # 🔥 策略 2: 在 "Final answer:" 后截断
+        final_match = re.search(r'(Final\s+answer\s*:\s*[^\n]+)', response, re.IGNORECASE)
+        if final_match:
+            # 只保留到 Final answer 的答案行
+            end_pos = final_match.end()
+            truncated = response[:end_pos]
+            
+            # 检查截断后是否还有有效内容
+            remaining = response[end_pos:].strip()
+            # 如果剩余部分以新问题开头，丢弃
+            noise_patterns = ['You are an AI', 'Problem:', 'Solution:', 'Question:', 'Context:']
+            for pattern in noise_patterns:
+                if remaining.lower().startswith(pattern.lower()):
+                    return truncated
+            
+            # 如果剩余部分太长，也截断
+            if len(remaining) > 50:
+                return truncated
+            
+            return response
+        
+        # 🔥 策略 3: 移除重复生成的新问题
+        noise_patterns = [
+            r'You are an AI assistant[^\n]*\n',
+            r'Problem:[^\n]*\n(?:.*\n)*?(?:Solution:|Answer:)',
+            r'Question:[^\n]*\n',
+        ]
+        
+        for pattern in noise_patterns:
+            match = re.search(pattern, response, re.IGNORECASE)
+            if match:
+                # 截断到这个模式之前
+                return response[:match.start()].strip()
+        
+        return response
+    
     def _get_layer_device(self, layer_idx: int):
         """
         获取指定层的设备
@@ -423,6 +514,9 @@ class KVAssembler:
         generated_ids = outputs.sequences[0][prompt_len:]
         response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
         
+        # 🔥 截断输出，移除无关内容
+        response = self._truncate_output(response)
+        
         print(f"[GEN-TEXT] 生成完成, 输出 {len(generated_ids)} tokens")
         
         # 6. 生成信息
@@ -615,7 +709,7 @@ class KVAssembler:
                     decoded_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                 except Exception:
                     pass
-                if "####" in decoded_so_far:
+                if self._should_stop_generation(decoded_so_far):
                     break
                 
                 current_token = next_token.unsqueeze(0)
@@ -626,6 +720,9 @@ class KVAssembler:
                     print(f"[KV-REUSE] 已生成 {step_idx + 2} tokens")
         
         response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        
+        # 🔥 截断输出，移除无关内容
+        response = self._truncate_output(response)
         
         # 统计复用率
         reuse_tokens = fixed_length + total_shots_tokens
@@ -808,7 +905,7 @@ class KVAssembler:
                     decoded_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                 except Exception:
                     pass
-                if "####" in decoded_so_far:
+                if self._should_stop_generation(decoded_so_far):
                     break
                 
                 # 更新状态
@@ -822,6 +919,10 @@ class KVAssembler:
         
         # 解码
         response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        
+        # 🔥 截断输出，移除无关内容
+        response = self._truncate_output(response)
+        
         print(f"[HYBRID] 生成完成, 输出 {len(generated_tokens)} tokens")
         
         # 生成信息
@@ -924,7 +1025,7 @@ class KVAssembler:
                     decoded_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                 except Exception:
                     decoded_so_far = decoded_so_far
-                if "####" in decoded_so_far:
+                if self._should_stop_generation(decoded_so_far):
                     break
                 
                 # 准备下一轮
@@ -940,6 +1041,9 @@ class KVAssembler:
             print(f"[GEN-KV] 生成完成, 总共生成 {len(generated_tokens)} tokens")
             # 解码
             response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        
+        # 🔥 截断输出，移除无关内容
+        response = self._truncate_output(response)
         
         gen_info = {
             'num_shots_used': len(selected_shot_ids),

@@ -132,9 +132,11 @@ class GSM8KHandler(BaseDatasetHandler):
         
         # 辅助函数：清理数字字符串（移除逗号和空格）
         def clean_number(num_str: str) -> str:
+            # 移除逗号和空格，保留负号、数字和小数点
             return re.sub(r'[,\s]', '', num_str)
         
         # 辅助函数：提取数字（支持带逗号和空格的格式）
+        # 匹配格式：-?1,234.56 或 -?1 234.56 或 -?1234.56
         def extract_number(s: str) -> str:
             # 支持千分位逗号: 1,234,567.89
             m = re.search(r'(-?\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?)', s)
@@ -172,21 +174,40 @@ class GSM8KHandler(BaseDatasetHandler):
                     num = extract_number(line)
                     if num:
                         return num
+                    # 如果这一行有内容但没数字，停止搜索
                     break
                 
                 # 如果 #### 后没有数字，可能是 "答案\n####" 格式
                 # 🔥 修复：从 #### 前面的文本中提取最后一个数字
                 before_hash = parts[0].strip()
                 if before_hash:
+                    # 直接从整个 before_hash 文本中提取最后一个数字
                     num = extract_last_number(before_hash)
                     if num:
                         return num
         
-        # 策略 2: 提取最后一个数字（支持带逗号格式）
+        # 策略 2: 查找 "answer is" 模式
+        m = re.search(r"(?:the\s+)?answer\s+is\s*[:\s]*([\$]?-?[\d,\s]+(?:\.\d+)?)", text, re.IGNORECASE)
+        if m:
+            return clean_number(m.group(1))
+        
+        # 策略 3: 查找 "final answer" 模式
+        m2 = re.search(r"final\s+answer\s*[:\s]*([\$]?-?[\d,\s]+(?:\.\d+)?)", text, re.IGNORECASE)
+        if m2:
+            return clean_number(m2.group(1))
+        
+        # 策略 4: 查找 "answer = " 模式
+        m3 = re.search(r"answer\s*[:=]\s*([\$]?-?[\d,\s]+(?:\.\d+)?)", text, re.IGNORECASE)
+        if m3:
+            return clean_number(m3.group(1))
+        
+        # 策略 5: 提取最后一个数字（支持带逗号格式）
+        # 先尝试匹配带逗号的大数字
         nums = re.findall(r'-?\d{1,3}(?:[,\s]\d{3})+(?:\.\d+)?', text)
         if nums:
             return clean_number(nums[-1])
         
+        # 再尝试普通数字
         nums = re.findall(r'-?\d+(?:\.\d+)?', text)
         if nums:
             return nums[-1]
@@ -879,26 +900,13 @@ class ModelScopeCOTHandler(BaseDatasetHandler):
         return [ex for ex in ds_list if str(ex.get("task", "")).strip() in task_set]
 
     def load_and_split(self, test_size: int = 300, seed: int = 42) -> Tuple[Dataset, Dataset]:
-        # 直接从本地加载数据集
-        local_path = "/data/oujie/models/AI-ModelScope/CoT-Collection"
-        print(f"从本地加载数据集: {local_path}")
-        
-        try:
-            # 使用 HuggingFace datasets 从本地路径加载
-            from datasets import load_dataset as hf_load_dataset
-            hf_dataset = hf_load_dataset(
-                local_path,
-                "en",
-                split="train",
-                trust_remote_code=True
-            )
-            train_ms = hf_dataset
-            print(f"成功加载数据集，总数据量: {len(train_ms)}")
-        except Exception as e:
-            print(f"本地加载失败: {e}")
-            raise RuntimeError(f"无法从本地路径加载数据集: {local_path}")
-        
-        full_list = [dict(x) for x in train_ms]
+        if MsDataset is None:
+            raise ImportError("ModelScope MsDataset not available")
+        subset = self.subset
+        cache_dir = "/mnt/data1/models"
+        train_ms = MsDataset.load("/mnt/data1/models/AI-ModelScope/CoT-Collection", split="train", cache_dir=cache_dir, trust_remote_code=True)
+        full_ms = train_ms
+        full_list = [dict(x) for x in full_ms]
         task_list = getattr(self, "task_list", None)
         print(f"task list:{task_list}")
         full_list = self._filter_by_tasks(full_list, task_list)
@@ -951,17 +959,126 @@ class ModelScopeCOTHandler(BaseDatasetHandler):
         return str(example.get("target", "")).strip()
 
     def extract_prediction(self, model_output: str) -> str:
+        """
+        从COT-Collection数据集的模型输出中提取预测答案
+        
+        支持的答案格式:
+        - Final answer: xxx
+        - 选择题: a, b, c, d, A, B, C, D
+        - 是/否题: Yes, No, a, b
+        - 数字答案
+        """
         import re
-        m = re.search(r"Final\s+answer\s*:\s*(.+?)(?:\n|$)", model_output, re.IGNORECASE)
+        
+        # 🔥 步骤 0: 预处理 - 截断到第一个 "Final answer" 后的答案，避免模型继续生成新问题
+        # 查找第一个 "Final answer:" 并截取其后的内容
+        first_final_match = re.search(r'Final\s+answer\s*:\s*(.+?)(?:\n|$)', model_output, re.IGNORECASE)
+        if first_final_match:
+            # 找到了 Final answer，截断到这个答案
+            answer_text = first_final_match.group(1).strip()
+            
+            # 🔥 清理答案文本：移除尾随的无关内容
+            # 如果答案中包含 "You are an AI" 等，截断到这些位置
+            noise_patterns = [
+                r'You are an AI',
+                r'Problem:',
+                r'Solution:',
+                r'Question:',
+                r'Context:',
+                r'\n\n',  # 双换行通常表示新的段落
+            ]
+            for pattern in noise_patterns:
+                noise_match = re.search(pattern, answer_text, re.IGNORECASE)
+                if noise_match:
+                    answer_text = answer_text[:noise_match.start()].strip()
+            
+            # 🔥 提取核心答案（处理选择题等）
+            return self._extract_core_answer(answer_text)
+        
+        # 🔥 步骤 1: 尝试匹配 "answer is xxx" 格式
+        m = re.search(r'answer\s+is\s+(.+?)(?:[\n\r.]|$)', model_output, re.IGNORECASE)
         if m:
-            return m.group(1).strip()
-        m = re.search(r"answer\s+is\s+(.+?)(?:[\n\r]|$)", model_output, re.IGNORECASE)
+            return self._extract_core_answer(m.group(1).strip())
+        
+        # 🔥 步骤 2: 尝试匹配 "Therefore, the answer is xxx" 格式
+        m = re.search(r'Therefore,?\s+(?:the\s+)?answer\s+is\s+(.+?)(?:[\n\r.]|$)', model_output, re.IGNORECASE)
         if m:
-            return m.group(1).strip()
-        lines = [ln.strip() for ln in model_output.strip().split("\n") if ln.strip()]
-        if lines:
-            return lines[-1]
-        return model_output.strip()
+            return self._extract_core_answer(m.group(1).strip())
+        
+        # 🔥 步骤 3: 尝试匹配独立的选择项答案（如 "b" 或 "(b)" 或 "`b`"）
+        # 先截断到第一个可能的答案位置
+        lines = model_output.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            # 匹配单独的选择项
+            option_match = re.match(r'^[`\(]?\s*([abcdABCD])\s*[\)`]?[\s\.\)]?(?:for\s+)?(Yes|No)?[\s\.]*$', line, re.IGNORECASE)
+            if option_match:
+                return option_match.group(1).lower()
+            
+            # 匹配 "b) No" 或 "a for Yes" 格式
+            choice_match = re.match(r'^([abcdABCD])\s*[\)\.]?\s*(for\s+)?(Yes|No)?\.?\s*$', line, re.IGNORECASE)
+            if choice_match:
+                return choice_match.group(1).lower()
+        
+        # 🔥 步骤 4: 如果以上都失败，返回第一行非空内容
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('Problem:') and not line.startswith('You are'):
+                return self._extract_core_answer(line)
+        
+        return model_output.strip()[:100]  # 限制长度
+    
+    def _extract_core_answer(self, answer_text: str) -> str:
+        """
+        从答案文本中提取核心答案
+        
+        处理各种格式:
+        - "b" -> "b"
+        - "(b)" -> "b"  
+        - "`b`" -> "b"
+        - "b) No" -> "b"
+        - "b for No" -> "b"
+        - "1857" -> "1857"
+        """
+        import re
+        
+        answer_text = answer_text.strip()
+        
+        # 移除尾随的标点
+        answer_text = re.sub(r'[\.,;:!?]+$', '', answer_text).strip()
+        
+        # 🔥 匹配选择项格式: "b", "(b)", "`b`", "b) No", "b. No", "a for Yes"
+        option_match = re.match(r'^[`\(]?\s*([abcdABCD1234])\s*[\)`]?(?:\s*[\)\.]\s*(?:for\s+)?(?:Yes|No|yes|no)?)?\s*[`]?$', answer_text, re.IGNORECASE)
+        if option_match:
+            opt = option_match.group(1)
+            # 如果是 1,2,3,4 转换为 a,b,c,d
+            if opt in '1234':
+                return chr(ord('a') + int(opt) - 1)
+            return opt.lower()
+        
+        # 🔥 匹配 "a. Western Bulldogs" 格式，只取选项字母
+        option_with_text = re.match(r'^([abcdABCD])\s*[\)\.:]\s*', answer_text)
+        if option_with_text:
+            return option_with_text.group(1).lower()
+        
+        # 🔥 匹配数字答案
+        num_match = re.match(r'^(\d+(?:[,\s]\d{3})*(?:\.\d+)?)\s*$', answer_text)
+        if num_match:
+            # 标准化数字（移除千分位分隔符）
+            return num_match.group(1).replace(',', '').replace(' ', '')
+        
+        # 🔥 匹配 Yes/No
+        if answer_text.lower() in ['yes', 'no']:
+            return answer_text.lower()
+        
+        # 🔥 截断过长的答案
+        if len(answer_text) > 200:
+            # 可能包含额外内容，截取第一行或第一句
+            first_line = answer_text.split('\n')[0].strip()
+            first_sentence = re.split(r'[.!?]', answer_text)[0].strip()
+            return first_line if len(first_line) <= 100 else first_sentence[:100]
+        
+        return answer_text
 
 DATASET_HANDLERS = {
     "openai/gsm8k": GSM8KHandler,
@@ -974,7 +1091,8 @@ DATASET_HANDLERS = {
 
 
 def get_dataset_handler(dataset_name: str, subset: str = None, tasks: str = None) -> BaseDatasetHandler:
-    """获取对应的数据集处理器
+    """
+    获取对应的数据集处理器
     
     Args:
         dataset_name: 数据集名称

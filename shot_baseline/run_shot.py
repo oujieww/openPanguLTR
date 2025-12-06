@@ -17,16 +17,13 @@ os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 os.environ.setdefault("HF_HUB_HTTP_TIMEOUT", "60")
 os.environ.setdefault("HF_HOME", "/data/oujie/models/hf_home")
 os.environ.setdefault("HF_DATASETS_CACHE", "/data/oujie/models/hf_home/datasets")
-# os.environ.setdefault("HF_TOKEN", "YOUR_HF_TOKEN") # 请通过环境变量 HF_TOKEN 设置
+os.environ.setdefault("HF_TOKEN", "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")
 
-# 添加根路径以定位 util 与 AdaCache 包
-base_path = os.path.join(os.path.dirname(__file__), '..')
-if base_path not in sys.path:
-    sys.path.insert(0, base_path)
+# 添加 util 路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # 添加 AdaCache 路径（复用 model_utils）
-adacache_path = os.path.join(os.path.dirname(__file__), '..', 'AdaCache')
-if adacache_path not in sys.path:
-    sys.path.append(adacache_path)
+adacache_path = os.path.join(os.path.dirname(__file__), '../AdaCache')
+sys.path.append(adacache_path)
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from util.dataset_handlers import get_dataset_handler
@@ -207,8 +204,6 @@ def load_model(model_name: str, model_root: str, device_kind: str, use_sharding:
     
     # 检测模型类型
     need_trust_remote = need_trust_remote_code(model_name)
-    if "pangu" in model_name.lower():
-        need_trust_remote = True
     
     # === 新增：强制 openPangu 使用远程代码 ===
     if "pangu" in model_name.lower():
