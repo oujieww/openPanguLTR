@@ -987,8 +987,8 @@ def get_dataset_handler(dataset_name: str, subset: str = None, tasks: str = None
     handler_class = DATASET_HANDLERS[dataset_name]
     handler = handler_class(dataset_name, subset)
     
-    # 如果提供了 tasks 参数，且 handler 支持 task_list，则设置它
-    if tasks and hasattr(handler, '_filter_by_tasks'):
+    # 🔥 如果提供了 tasks 参数，将其设置到 handler 上
+    if tasks:
         task_list = [t.strip() for t in tasks.split(',') if t.strip()]
         handler.task_list = task_list
     

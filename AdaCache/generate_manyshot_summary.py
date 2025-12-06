@@ -273,10 +273,10 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="从 Many-Shot KV JSONL 结果生成汇总表（支持任意模型）")
     parser.add_argument("--results_dir", type=str, 
-                       default="/data/oujie/oujie-data/shareShot/AdaCache",
+                       default="./outputs",
                        help="结果目录（会递归查找所有 JSONL 文件）")
     parser.add_argument("--output_csv", type=str,
-                       default="/data/oujie/oujie-data/shareShot/AdaCache/summary_manyshot_kv.csv",
+                       default="./outputs/summary_manyshot_kv.csv",
                        help="输出 CSV 文件路径")
     parser.add_argument("--run_id", type=str, default="manyshot_kv", help="运行 ID")
     

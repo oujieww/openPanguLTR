@@ -14,8 +14,8 @@ import logging
 from typing import List, Tuple
 from tqdm.auto import tqdm
 
-# 添加 util 路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'util'))
+# 添加当前目录到路径以引用同级模块
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from kv_pool_manager import KVPoolManager
 from query_encoder import compute_cosine_similarity
