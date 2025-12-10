@@ -17,7 +17,8 @@ os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 os.environ.setdefault("HF_HUB_HTTP_TIMEOUT", "60")
 os.environ.setdefault("HF_HOME", "/data/oujie/models/hf_home")
 os.environ.setdefault("HF_DATASETS_CACHE", "/data/oujie/models/hf_home/datasets")
-os.environ.setdefault("HF_TOKEN", "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")
+# 从环境变量获取 HF_TOKEN，如果未设置则不设置
+# os.environ.setdefault("HF_TOKEN", "YOUR_HF_TOKEN")  # 请通过环境变量 HF_TOKEN 设置
 
 # 添加 util 路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
