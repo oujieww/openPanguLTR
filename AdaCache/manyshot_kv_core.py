@@ -23,6 +23,9 @@ from tqdm.auto import tqdm
 
 # 优先使用本地 AdaCache 的辅助模块
 sys.path.insert(0, os.path.dirname(__file__))
+# Merge: 修改路径从 ../baseline 到 ../util
+# Original: # 再加入 baseline 路径以复用其余组件
+# Original: sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../baseline'))
 # 加入根路径以复用 util 包
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 

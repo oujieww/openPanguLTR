@@ -120,13 +120,13 @@ def parse_filename(filename):
 
 def infer_dataset_from_path(file_path):
     """
-    从文件路径推断数据集
+    从文件路径推断数据集和任务信息
     
     Args:
         file_path: Path 对象
     
     Returns:
-        tuple: (dataset_name, subset)
+        tuple: (dataset_name, subset, task_name)
     """
     path_str = str(file_path).lower()
     
@@ -142,11 +142,33 @@ def infer_dataset_from_path(file_path):
         'ugphysics': ('UGPhysics/ugphysics', 'mixed')
     }
     
-    for key, (dataset, subset) in dataset_mapping.items():
-        if key in path_str:
-            return dataset, subset
+    # 从路径中提取任务名
+    task_name = 'unknown'
+    # 查找路径中的任务标识符
+    import re
+    # 匹配类似 llama_3.2_3b_taskname 的模式
+    match = re.search(r'llama_3[._]2[._]3b[._]([^/\\]+)', path_str)
+    if match:
+        task_name = match.group(1)
     
-    return 'unknown', 'unknown'
+    # 根据任务名确定数据集
+    dataset = 'unknown'
+    subset = 'unknown'
+    for key, (ds, sb) in dataset_mapping.items():
+        if key in task_name:
+            dataset = ds
+            subset = sb
+            break
+    
+    # 如果没找到匹配的数据集，尝试从路径中推断
+    if dataset == 'unknown':
+        for key, (ds, sb) in dataset_mapping.items():
+            if key in path_str:
+                dataset = ds
+                subset = sb
+                break
+    
+    return dataset, subset, task_name
 
 
 def generate_summary_from_manyshot_results(results_dir, output_csv, run_id='manyshot_kv'):
@@ -170,7 +192,7 @@ def generate_summary_from_manyshot_results(results_dir, output_csv, run_id='many
     
     # CSV 表头
     headers = [
-        "run_id", "mode", "dataset", "subset", "model",
+        "run_id", "mode", "dataset", "subset", "task_name", "model",
         "global_pool_size", "entropy_threshold", "window_size", "paper_k_full",
         "count", "optimal_k_mean", "optimal_k_median", "optimal_k_min", "optimal_k_max",
         "acc_numeric", "em_string", "contains", "token_f1",
@@ -193,8 +215,8 @@ def generate_summary_from_manyshot_results(results_dir, output_csv, run_id='many
         # 解析文件名
         config = parse_filename(jsonl_file.name)
         
-        # 从路径推断数据集
-        dataset, subset = infer_dataset_from_path(jsonl_file)
+        # 从路径推断数据集和任务
+        dataset, subset, task_name = infer_dataset_from_path(jsonl_file)
         
         # 尝试读取同前缀的 metrics.json 以获取真实配置
         metrics_path = str(jsonl_file).replace('.jsonl', '_metrics.json')
@@ -220,6 +242,7 @@ def generate_summary_from_manyshot_results(results_dir, output_csv, run_id='many
             "mode": "manyshot_kv",
             "dataset": dataset,
             "subset": subset,
+            "task_name": task_name,
             "model": config['model'],
             "global_pool_size": gp_size,
             "entropy_threshold": f"{float(tau):.2f}",
@@ -272,11 +295,19 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="从 Many-Shot KV JSONL 结果生成汇总表（支持任意模型）")
+    # Merge: 修改默认路径为共享存储路径
+    # Original: parser.add_argument("--results_dir", type=str, 
+    # Original:                    default="./outputs",
+    # Original:                    help="结果目录（会递归查找所有 JSONL 文件）")
     parser.add_argument("--results_dir", type=str, 
-                       default="./outputs",
+                       default="/data/oujie/oujie-data/shareShot/AdaCache",
                        help="结果目录（会递归查找所有 JSONL 文件）")
+    # Merge: 修改默认输出路径为共享存储路径
+    # Original: parser.add_argument("--output_csv", type=str,
+    # Original:                    default="./outputs/summary_manyshot_kv.csv",
+    # Original:                    help="输出 CSV 文件路径")
     parser.add_argument("--output_csv", type=str,
-                       default="./outputs/summary_manyshot_kv.csv",
+                       default="/data/oujie/oujie-data/shareShot/AdaCache/summary_manyshot_kv.csv",
                        help="输出 CSV 文件路径")
     parser.add_argument("--run_id", type=str, default="manyshot_kv", help="运行 ID")
     

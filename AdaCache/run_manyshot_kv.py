@@ -21,9 +21,15 @@ from datetime import datetime
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 os.environ.setdefault("HF_HUB_HTTP_TIMEOUT", "60")
-os.environ.setdefault("HF_HOME", "/data/oujie/models/hf_home")
-os.environ.setdefault("HF_DATASETS_CACHE", "/data/oujie/models/hf_home/datasets")
-# os.environ.setdefault("HF_TOKEN", "YOUR_HF_TOKEN") # 请通过环境变量 HF_TOKEN 设置
+# Merge: 修改 HF_HOME 路径为共享存储路径
+Original: os.environ.setdefault("HF_HOME", "/data/oujie/models/hf_home")
+# os.environ.setdefault("HF_HOME", "/home/models/oujie-data/hf_home")
+# Merge: 修改 HF_DATASETS_CACHE 路径为共享存储路径
+Original: os.environ.setdefault("HF_DATASETS_CACHE", "/data/oujie/models/hf_home/datasets")
+# os.environ.setdefault("HF_DATASETS_CACHE", "/home/models/oujie-data/hf_home/datasets")
+# Merge: 添加 HF_TOKEN 设置
+# Original: # os.environ.setdefault("HF_TOKEN", "YOUR_HF_TOKEN") # 请通过环境变量 HF_TOKEN 设置
+os.environ.setdefault("HF_TOKEN", "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")
 
 # 添加根路径以定位 util 包
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -74,11 +80,17 @@ def load_model(model_name: str, model_root: str, device_kind: str, use_sharding:
         need_trust_remote = True
     
     logging.info(f"模型类型检测: {'需要' if need_trust_remote else '不需要'} trust_remote_code")
+    # Merge: 移除 local_files_only=True 以支持在线下载
+    # Original: tokenizer = AutoTokenizer.from_pretrained(
+    #     local_path,
+    #     trust_remote_code=need_trust_remote,
+    #     use_fast=True,
+    #     local_files_only=True
+    # )
     tokenizer = AutoTokenizer.from_pretrained(
-        local_path,
-        trust_remote_code=need_trust_remote,
-        use_fast=True,
-        local_files_only=True
+        local_path, 
+        trust_remote_code=need_trust_remote, 
+        use_fast=True
     )
     
     dtype = torch.float16 if device_kind in ("cuda", "npu") else None
@@ -94,24 +106,39 @@ def load_model(model_name: str, model_root: str, device_kind: str, use_sharding:
     
     if use_sharding:
         logging.info(f"使用分片模式加载模型 (device_map=auto)")
+        # Merge: 移除 local_files_only=True 以支持在线下载
+        # Original: model = AutoModelForCausalLM.from_pretrained(
+        #     local_path,
+        #     trust_remote_code=need_trust_remote,
+        #     torch_dtype=dtype,
+        #     low_cpu_mem_usage=True,
+        #     device_map="auto",
+        #     local_files_only=True
+        # )
         model = AutoModelForCausalLM.from_pretrained(
             local_path,
             trust_remote_code=need_trust_remote,
             torch_dtype=dtype,
             low_cpu_mem_usage=True,
-            device_map="auto",
-            local_files_only=True
+            device_map="auto"
         )
         logging.info(f"模型分片情况: {getattr(model, 'hf_device_map', 'N/A')}")
     else:
         target = "npu" if device_kind == "npu" else ("cuda" if device_kind == "cuda" else "cpu")
         logging.info(f"加载模型到 {target}")
+        # Merge: 移除 local_files_only=True 以支持在线下载
+        # Original: model = AutoModelForCausalLM.from_pretrained(
+        #     local_path,
+        #     trust_remote_code=need_trust_remote,
+        #     torch_dtype=dtype,
+        #     low_cpu_mem_usage=True,
+        #     local_files_only=True
+        # )
         model = AutoModelForCausalLM.from_pretrained(
             local_path,
             trust_remote_code=need_trust_remote,
             torch_dtype=dtype,
-            low_cpu_mem_usage=True,
-            local_files_only=True
+            low_cpu_mem_usage=True
         )
         model.to(target)
     
@@ -127,11 +154,19 @@ def load_model(model_name: str, model_root: str, device_kind: str, use_sharding:
     return tokenizer, model
 
 
+# Merge: 添加 tasks 参数支持
+# Original: def run_manyshot_kv_experiment(
+#     config: AdaCacheConfig,
+#     model_name: str,
+#     dataset_name: str,
+#     dataset_subset: str = None
+# ):
 def run_manyshot_kv_experiment(
     config: AdaCacheConfig,
     model_name: str,
     dataset_name: str,
-    dataset_subset: str = None
+    dataset_subset: str = None,
+    tasks: str = None  # 🔥 添加 tasks 参数
 ):
     """
     运行 Many-Shot KV Cache 实验
@@ -141,12 +176,15 @@ def run_manyshot_kv_experiment(
         model_name: 模型名称
         dataset_name: 数据集名称
         dataset_subset: 数据集子集
+        tasks: 任务列表（逗号分隔），用于过滤 CoT-Collection 等数据集
     """
     device_kind = config.device or _detect_device()
     
     tokenizer, model = load_model(model_name, config.model_root, device_kind, config.use_sharding)
     
-    dataset_handler = get_dataset_handler(dataset_name, dataset_subset)
+    # Merge: 添加 tasks 参数传递
+    # Original: dataset_handler = get_dataset_handler(dataset_name, dataset_subset)
+    dataset_handler = get_dataset_handler(dataset_name, dataset_subset, tasks)
     
     logging.info(f"加载测试集: {dataset_name}/{dataset_subset or 'default'}")
     _, test_set = dataset_handler.load_and_split(test_size=config.eval_samples, seed=config.seed)
@@ -163,7 +201,9 @@ def run_manyshot_kv_experiment(
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_id = safe_model_id(model_name)
-    dataset_id = dataset_name.replace('/', '_')
+    # Merge: 添加冒号替换以支持更多格式
+    # Original: dataset_id = dataset_name.replace('/', '_')
+    dataset_id = dataset_name.replace('/', '_').replace(':', '_')
     if dataset_subset:
         dataset_id += f"_{dataset_subset}"
     
@@ -228,6 +268,10 @@ def main():
                        help="模型路径")
     parser.add_argument("--datasets", type=str, default="openai/gsm8k:main",
                        help="数据集配置")
+    # Merge: 添加 tasks 参数
+    # Original: 无此参数
+    parser.add_argument("--tasks", type=str, default=None,
+                       help="任务列表（逗号分隔），用于过滤 CoT-Collection 等数据集")
     
     # 实验配置
     parser.add_argument("--eval_samples", type=int, default=100, help="评测样本数")
@@ -292,11 +336,19 @@ def main():
                 logging.info(f"# 实验: {model_name} × {dataset_name}/{dataset_subset or 'default'}")
                 logging.info("#" * 80)
                 
+                # Merge: 传递 tasks 参数
+                # Original: metrics = run_manyshot_kv_experiment(
+                #     config=config,
+                #     model_name=model_name,
+                #     dataset_name=dataset_name,
+                #     dataset_subset=dataset_subset
+                # )
                 metrics = run_manyshot_kv_experiment(
                     config=config,
                     model_name=model_name,
                     dataset_name=dataset_name,
-                    dataset_subset=dataset_subset
+                    dataset_subset=dataset_subset,
+                    tasks=args.tasks  # 🔥 传递 tasks 参数
                 )
                 
                 all_results.append({
@@ -319,24 +371,6 @@ def main():
         logging.info(f"  平均 shot 数: {result['metrics']['num_shots_mean']:.2f}")
     
     logging.info("\n✓ 所有实验完成！")
-    
-    # 自动生成汇总表
-    if all_results:
-        logging.info("\n" + "=" * 80)
-        logging.info("正在生成汇总表...")
-        logging.info("=" * 80)
-        
-        try:
-            summary_csv = os.path.join(args.output_dir, f"summary_{args.run_id}.csv")
-            generate_summary_from_manyshot_results(
-                results_dir=args.output_dir,
-                output_csv=summary_csv,
-                run_id=args.run_id
-            )
-            logging.info(f"✅ 汇总表已生成: {summary_csv}")
-        except Exception as e:
-            logging.error(f"汇总表生成失败: {e}", exc_info=True)
-
 
 if __name__ == "__main__":
     main()

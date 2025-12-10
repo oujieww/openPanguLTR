@@ -10,6 +10,9 @@ import pickle
 from typing import List, Dict, Tuple
 from pathlib import Path
 
+# Merge: 修改路径从 ../baseline 到 ../
+# Original: # 添加 baseline 路径以复用代码
+# Original: sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../baseline'))
 # 添加根路径以定位 util 包
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -20,6 +23,8 @@ except ImportError:
         "请安装 rank_bm25 库：pip install rank-bm25"
     )
 
+# Merge: 修改导入路径从 dataset_handlers 到 util.dataset_handlers
+# Original: from dataset_handlers import get_dataset_handler
 from util.dataset_handlers import get_dataset_handler
 
 

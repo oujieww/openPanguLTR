@@ -49,6 +49,8 @@ class AdaCacheConfig:
     # ========== 路径配置 ==========
     model_root: str = "/home/models/models/"
     output_dir: str = "./outputs"
+    # Merge: 修改路径注释从 baseline 改为 util
+    # Original: baseline_dir: str = "../baseline"  # baseline 代码路径，用于复用
     baseline_dir: str = "../util"  # util 代码路径，用于复用
     
     # ========== 运行配置 ==========
@@ -138,5 +140,7 @@ def create_config_from_args(args) -> AdaCacheConfig:
                 config.dataset_configs.append({"name": name.strip(), "subset": subset.strip()})
             else:
                 config.dataset_configs.append({"name": ds, "subset": None})
+    
+    return config
     
     return config
